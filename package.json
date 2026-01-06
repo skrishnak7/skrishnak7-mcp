@@ -1,7 +1,7 @@
 {
   "name": "skrishnak7-mcp",
   "version": "0.1.0",
-  "description": "Sample MCP server for flight schedule lookup using Amadeus",
+  "description": "Sample MCP server for flight schedule lookup using Skyscanner",
   "type": "module",
   "main": "dist/index.js",
   "bin": {

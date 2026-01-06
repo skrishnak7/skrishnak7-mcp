@@ -12,8 +12,9 @@ const FlightSearchSchema = z.object({
   departureDate: z
     .string()
     .regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD format"),
-  adults: z.number().int().min(1).max(9).optional(),
-  nonStop: z.boolean().optional(),
+  country: z.string().length(2).optional(),
+  currency: z.string().length(3).optional(),
+  locale: z.string().min(2).max(10).optional(),
   maxResults: z.number().int().min(1).max(50).optional(),
 });
 
@@ -32,19 +33,21 @@ const toolSchema = {
       type: "string",
       description: "Date in YYYY-MM-DD format",
     },
-    adults: {
-      type: "integer",
-      description: "Number of adult travelers (1-9). Default is 1.",
-      minimum: 1,
-      maximum: 9,
+    country: {
+      type: "string",
+      description: "Market country code (ISO-2). Default is US.",
     },
-    nonStop: {
-      type: "boolean",
-      description: "If true, return only non-stop options.",
+    currency: {
+      type: "string",
+      description: "Currency code (ISO-3). Default is USD.",
+    },
+    locale: {
+      type: "string",
+      description: "Locale like en-US. Default is en-US.",
     },
     maxResults: {
       type: "integer",
-      description: "Maximum number of offers to return (1-50).",
+      description: "Maximum number of quotes to return (1-50).",
       minimum: 1,
       maximum: 50,
     },
@@ -63,7 +66,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: "find_flight_schedule",
         description:
-          "Find available flight options between two airports on a date using Amadeus Flight Offers Search.",
+          "Find available flight options between two airports on a date using Skyscanner Browse Quotes.",
         inputSchema: toolSchema,
       },
     ],
@@ -94,39 +97,24 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     origin,
     destination,
     departureDate,
-    adults = 1,
-    nonStop = false,
+    country = "US",
+    currency = "USD",
+    locale = "en-US",
     maxResults = 10,
   } = parsed.data;
 
   try {
-    const accessToken = await getAmadeusToken();
-    const baseUrl = getAmadeusBaseUrl();
-    const params = new URLSearchParams({
-      originLocationCode: origin.toUpperCase(),
-      destinationLocationCode: destination.toUpperCase(),
-      departureDate,
-      adults: String(adults),
-      nonStop: String(nonStop),
-      max: String(maxResults),
-    });
-
-    const response = await fetch(
-      `${baseUrl}/v2/shopping/flight-offers?${params.toString()}`,
-      {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-        },
-      }
-    );
+    const { baseUrl, headers } = getSkyscannerConfig();
+    const url = `${baseUrl}/apiservices/browsequotes/v1.0/${country}/${currency}/${locale}/${origin.toUpperCase()}/${destination.toUpperCase()}/${departureDate}`;
+    const response = await fetch(url, { headers });
 
     if (!response.ok) {
       const text = await response.text();
-      throw new Error(`Amadeus error ${response.status}: ${text}`);
+      throw new Error(`Skyscanner error ${response.status}: ${text}`);
     }
 
     const data = await response.json();
-    const summarized = summarizeOffers(data);
+    const summarized = summarizeQuotes(data, maxResults);
 
     return {
       content: [
@@ -149,87 +137,77 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 });
 
-async function getAmadeusToken(): Promise<string> {
-  const clientId = process.env.AMADEUS_CLIENT_ID;
-  const clientSecret = process.env.AMADEUS_CLIENT_SECRET;
+function getSkyscannerConfig(): { baseUrl: string; headers: HeadersInit } {
+  const apiKey = process.env.SKYSCANNER_API_KEY;
+  const apiHost =
+    process.env.SKYSCANNER_API_HOST ??
+    "skyscanner-skyscanner-flight-search-v1.p.rapidapi.com";
+  const baseUrl = process.env.SKYSCANNER_BASE_URL ?? `https://${apiHost}`;
 
-  if (!clientId || !clientSecret) {
-    throw new Error(
-      "Missing AMADEUS_CLIENT_ID or AMADEUS_CLIENT_SECRET environment variables."
-    );
+  if (!apiKey) {
+    throw new Error("Missing SKYSCANNER_API_KEY environment variable.");
   }
 
-  const baseUrl = getAmadeusBaseUrl();
-  const body = new URLSearchParams({
-    grant_type: "client_credentials",
-    client_id: clientId,
-    client_secret: clientSecret,
-  });
-
-  const response = await fetch(`${baseUrl}/v1/security/oauth2/token`, {
-    method: "POST",
+  return {
+    baseUrl,
     headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
+      "X-RapidAPI-Key": apiKey,
+      "X-RapidAPI-Host": apiHost,
     },
-    body,
+  };
+}
+
+type SkyscannerBrowseQuotesResponse = {
+  Quotes?: Array<{
+    QuoteId?: number;
+    MinPrice?: number;
+    Direct?: boolean;
+    OutboundLeg?: {
+      CarrierIds?: number[];
+      OriginId?: number;
+      DestinationId?: number;
+      DepartureDate?: string;
+    };
+  }>;
+  Places?: Array<{ PlaceId?: number; IataCode?: string; Name?: string }>;
+  Carriers?: Array<{ CarrierId?: number; Name?: string }>;
+};
+
+function summarizeQuotes(
+  data: SkyscannerBrowseQuotesResponse,
+  maxResults: number
+) {
+  if (!data?.Quotes?.length) {
+    return { quotes: [], message: "No flight quotes found." };
+  }
+
+  const placeMap = new Map(
+    data.Places?.map((place) => [place.PlaceId, place]) ?? []
+  );
+  const carrierMap = new Map(
+    data.Carriers?.map((carrier) => [carrier.CarrierId, carrier]) ?? []
+  );
+
+  const quotes = data.Quotes.slice(0, maxResults).map((quote) => {
+    const outbound = quote.OutboundLeg;
+    const carrierNames =
+      outbound?.CarrierIds?.map((id) => carrierMap.get(id)?.Name).filter(
+        Boolean
+      ) ?? [];
+    const origin = placeMap.get(outbound?.OriginId);
+    const destination = placeMap.get(outbound?.DestinationId);
+
+    return {
+      price: quote.MinPrice ?? "Unknown",
+      direct: quote.Direct ?? false,
+      carriers: carrierNames,
+      origin: origin?.IataCode ?? origin?.Name ?? "Unknown",
+      destination: destination?.IataCode ?? destination?.Name ?? "Unknown",
+      departureDate: outbound?.DepartureDate ?? "Unknown",
+    };
   });
 
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Token error ${response.status}: ${text}`);
-  }
-
-  const data = await response.json();
-  if (!data.access_token) {
-    throw new Error("Token response missing access_token.");
-  }
-
-  return data.access_token as string;
-}
-
-function getAmadeusBaseUrl(): string {
-  const env = process.env.AMADEUS_ENV?.toLowerCase();
-  return env === "production"
-    ? "https://api.amadeus.com"
-    : "https://test.api.amadeus.com";
-}
-
-function summarizeOffers(data: {
-  data?: Array<{
-    price?: { total?: string; currency?: string };
-    itineraries?: Array<{
-      duration?: string;
-      segments?: Array<{
-        carrierCode?: string;
-        number?: string;
-        departure?: { iataCode?: string; at?: string };
-        arrival?: { iataCode?: string; at?: string };
-      }>;
-    }>;
-  }>;
-}) {
-  if (!data?.data?.length) {
-    return { offers: [], message: "No flight offers found." };
-  }
-
-  const offers = data.data.map((offer) => ({
-    price: offer.price?.total
-      ? `${offer.price.total} ${offer.price.currency ?? ""}`.trim()
-      : "Unknown",
-    itineraries: offer.itineraries?.map((itinerary) => ({
-      duration: itinerary.duration ?? "Unknown",
-      segments:
-        itinerary.segments?.map((segment) => ({
-          flight: `${segment.carrierCode ?? ""}${segment.number ?? ""}`.trim(),
-          from: segment.departure?.iataCode ?? "Unknown",
-          to: segment.arrival?.iataCode ?? "Unknown",
-          departAt: segment.departure?.at ?? "Unknown",
-          arriveAt: segment.arrival?.at ?? "Unknown",
-        })) ?? [],
-    })),
-  }));
-
-  return { offers };
+  return { quotes };
 }
 
 const transport = new StdioServerTransport();

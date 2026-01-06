@@ -1,15 +1,15 @@
 # skrishnak7-mcp
 
 Sample MCP server that exposes a flight schedule finder tool backed by the
-Amadeus Flight Offers Search API.
+Skyscanner Browse Quotes API (via RapidAPI).
 
 ## Features
 - MCP tool: `find_flight_schedule`
-- Amadeus OAuth2 token flow
-- Simple summary of flight offers
+- Skyscanner Browse Quotes lookup
+- Simple summary of flight quotes
 
 ## Setup
-1) Create an Amadeus account and get API keys.
+1) Create a RapidAPI account and subscribe to a Skyscanner API.
 2) Copy `.env.example` to `.env` and fill in values.
 3) Install dependencies and build:
 
@@ -33,9 +33,9 @@ Add a server entry to your Claude Desktop config:
       "command": "node",
       "args": ["/Users/krishnakanukuntla/skrishnak7-mcp/dist/index.js"],
       "env": {
-        "AMADEUS_CLIENT_ID": "your_client_id_here",
-        "AMADEUS_CLIENT_SECRET": "your_client_secret_here",
-        "AMADEUS_ENV": "test"
+        "SKYSCANNER_API_KEY": "your_rapidapi_key_here",
+        "SKYSCANNER_API_HOST": "skyscanner-skyscanner-flight-search-v1.p.rapidapi.com",
+        "SKYSCANNER_BASE_URL": "https://skyscanner-skyscanner-flight-search-v1.p.rapidapi.com"
       }
     }
   }
@@ -50,12 +50,13 @@ Example inputs for `find_flight_schedule`:
   "origin": "SFO",
   "destination": "JFK",
   "departureDate": "2025-06-15",
-  "adults": 1,
-  "nonStop": false,
+  "country": "US",
+  "currency": "USD",
+  "locale": "en-US",
   "maxResults": 5
 }
 ```
 
 ## Notes
-- The Amadeus test environment is used by default.
-- Set `AMADEUS_ENV=production` to use live endpoints.
+- This uses the legacy Skyscanner Browse Quotes endpoint on RapidAPI.
+- Update the host or base URL if your RapidAPI Skyscanner API differs.
